@@ -14,7 +14,6 @@ import searchengine.repositories.LemmaRepository;
 import searchengine.repositories.PageRepository;
 import searchengine.repositories.SiteRepository;
 
-
 import java.net.URL;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -34,8 +33,9 @@ public class IndexingServiceImpl implements IndexingService {
     private final IndexRepository indexRepository;
     private final LemmaRepository lemmaRepository;
 
-    private ArrayList<ForkJoinPool> forkJoinPoolList = new ArrayList<>();
-    private ArrayList<SiteParserForkJoin> siteParserForkJoins = new ArrayList<>();
+    // HashMap, где находятся объекты ForkJoinPool (для проверки состояния или остановки)
+    // и объекты SiteParserForkJoin - для получения оттуда незавершенных задч
+    private HashMap<ForkJoinPool, SiteParserForkJoin> forkjoinMap = new HashMap<>();
 
 
     @Override
@@ -67,40 +67,42 @@ public class IndexingServiceImpl implements IndexingService {
                     new CopyOnWriteArrayList<String>(),
                     new CopyOnWriteArrayList<String>());
 
-            forkJoinPoolList.add(forkJoinPool);
-            siteParserForkJoins.add(siteParserForkJoin);
+            forkjoinMap.put(forkJoinPool, siteParserForkJoin);
+
 
             // запускаем ForkJoinPool
             CopyOnWriteArrayList<Page> pageList = forkJoinPool.invoke(siteParserForkJoin);
 
-//            synchronized (newSite) {
+            if (!SiteParserForkJoin.shutdownForkJoin) {
                 newSite.setStatus(SiteIndexationStatus.INDEXED);
                 siteRepository.save(newSite);
-//            }
+            }
         });
     }
 
     @Override
     public void stopIndexing() {
-        siteParserForkJoins.forEach(siteParserForkJoin -> {
+        for (Map.Entry<ForkJoinPool, SiteParserForkJoin> map : forkjoinMap.entrySet()) {
+            ForkJoinPool forkJoinPool = map.getKey();
+            SiteParserForkJoin siteParserForkJoin = map.getValue();
 
-            // Вносим изменения в таблицу Site
-            Site site = siteParserForkJoin.getSite();
-            site.setLastError("Индексация остановлена пользователем");
-            site.setStatusTime(LocalDateTime.now());
-            site.setStatus(SiteIndexationStatus.FAILED);
-            siteRepository.save(site);
+            // если forkJoinpool не завершил работу, то
+            if (!forkJoinPool.isQuiescent()) {
+                Site site = siteParserForkJoin.getSite();
+                site.setLastError("Индексация остановлена пользователем");
+                site.setStatusTime(LocalDateTime.now());
+                site.setStatus(SiteIndexationStatus.FAILED);
+                siteRepository.save(site);
 
-            // достаем необработанные страницы
-            ArrayList<Page> pages = getPagesListFromForkJoinPool(siteParserForkJoin);
+                // забираем и сохраняем в базу необработанные страницы (таски)
+                ArrayList<Page> pages = getPagesListFromForkJoinPool(siteParserForkJoin);
+                pages.forEach(siteParserForkJoin::savePageToDatabase);
 
-            // сохраняем данные в базу
-            pages.forEach(page -> siteParserForkJoin.savePageToDatabase(page));
-        });
-
-        // останавливаем ForkJoinPool
-        SiteParserForkJoin.shutdownForkJoin = true;
-        forkJoinPoolList.forEach(forkJoinPool -> forkJoinPool.shutdown());
+                // останавливаем ForkJoinPool
+                SiteParserForkJoin.shutdownForkJoin = true;
+                forkJoinPool.shutdown();
+            }
+        }
     }
 
 
@@ -108,6 +110,7 @@ public class IndexingServiceImpl implements IndexingService {
     public IndexingResponse indexingPage(String url) {
         IndexingResponse response = new IndexingResponse();
 
+        // проверяем урл на валидность
         if (!isValidUrl(url)) {
             response.setError("Введенный вами текст не является Url");
             return response;
@@ -120,7 +123,7 @@ public class IndexingServiceImpl implements IndexingService {
 
         // получаем или создаем объект Site
         Site site = new Site();
-        ArrayList <String> siteNameAndDomain = getSiteNameAndDomainByUrl(url);
+        ArrayList<String> siteNameAndDomain = getSiteNameAndDomainByUrl(url);
 
         Optional<Site> optionalSite = siteRepository.findByUrl(siteNameAndDomain.get(1));
         if (!optionalSite.isPresent()) {
@@ -158,15 +161,14 @@ public class IndexingServiceImpl implements IndexingService {
                 new CopyOnWriteArrayList<String>(Arrays.asList(url))
         );
 
+        // запускаем парсинг на одну задачу, в однопотоке
         siteParserForkJoin.parseSinglePage = true;
         SiteParserForkJoin.shutdownForkJoin = false;
 
+        // отправляем задачу выполняться, а сами возвращаем ответ
         new Thread(() -> siteParserForkJoin.compute()).start();
-
-
         return response;
     }
-
 
     // получаем все леммы этой страницы, изменяем значения в таблице lemma,
     // удаляем page (и за ней из-за каскадного удаления будут устранены все связанные объекты Index)
@@ -193,6 +195,7 @@ public class IndexingServiceImpl implements IndexingService {
         makeTransactionToDecreaseLemmas(changedLemmas);
     }
 
+    // сохранение измененного количества лемм в базу
     @Transactional
     void makeTransactionToDecreaseLemmas(ArrayList<Lemma> changedLemmas) {
         changedLemmas.forEach(lemma -> lemmaRepository.save(lemma));
@@ -219,8 +222,9 @@ public class IndexingServiceImpl implements IndexingService {
         return false;
     }
 
-    private ArrayList <String> getSiteNameAndDomainByUrl(String url) {
-        ArrayList <String> siteNameAndDomain = new ArrayList<>();
+    // метод получения имени сайта и домена из урл
+    private ArrayList<String> getSiteNameAndDomainByUrl(String url) {
+        ArrayList<String> siteNameAndDomain = new ArrayList<>();
         for (searchengine.config.Site site : sites.getSites()) {
             if (url.startsWith(site.getUrl())) {
                 siteNameAndDomain.add(site.getName());
@@ -266,7 +270,6 @@ public class IndexingServiceImpl implements IndexingService {
         });
         return pages;
     }
-
 }
 
 

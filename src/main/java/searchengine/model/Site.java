@@ -34,5 +34,4 @@ public class Site {
 
     @Column(nullable = false)
     private String name;
-
 }

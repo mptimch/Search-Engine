@@ -1,10 +1,10 @@
 indexing-settings:
   sites:
-    - url: https://agrostroiservice.ru/
+    - url: https://agrostroiservice.ru
       name: АгростройСервис
-    - url: https://stomax.pro/
+    - url: https://stomax.pro
       name: Стомакс
-    - url: https://sazur.ru/
+    - url: https://sazur.ru
       name: Сазур
 
 #    - url: https://zharpizza.ru/kursk

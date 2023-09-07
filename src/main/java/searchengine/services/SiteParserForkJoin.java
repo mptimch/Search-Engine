@@ -38,7 +38,7 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     private final Site site;
     private final String path;
 
-    private final  CopyOnWriteArrayList<Page> pageList;
+    private final CopyOnWriteArrayList<Page> pageList;
 
     // HashSet для избежания повторного обхода страниц
     private final CopyOnWriteArrayList<String> doneUrls;
@@ -54,9 +54,8 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     public boolean parseSinglePage;
 
 
-
     @Override
-    protected CopyOnWriteArrayList <Page> compute() {
+    protected CopyOnWriteArrayList<Page> compute() {
         // проверка, не завершаем ли мы парсинг
         if (shutdownForkJoin) {
             return new CopyOnWriteArrayList<>();
@@ -114,13 +113,13 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         if (parseSinglePage) {
             Page page = createPage(path, site, statusCode, pageContent);
             pageRepository.save(page);
-            ArrayList <Lemma> lemmas = createAndSaveLemmas(page, site);
+            ArrayList<Lemma> lemmas = createAndSaveLemmas(page, site);
             createAndSaveIndexes(lemmas, page);
             return new CopyOnWriteArrayList<>();
         }
 
-
-        List<SiteParserForkJoin> taskList = new ArrayList<>(); // список подзадач для ForkJoinPool
+        // создаем список подзадач для ForkJoinPool
+        List<SiteParserForkJoin> taskList = new ArrayList<>();
 
         urls.forEach(element -> {
             //проверяем урл на корректность
@@ -148,17 +147,16 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
             taskUrls.remove(path);
         } else return new CopyOnWriteArrayList<>();
 
-        // сохраняем в репозиторий при превышении \ достижении заданного значения
-            boolean isUnique =  savePageToDatabase(page);
-            if (isUnique) {
-                ArrayList<Lemma> lemmas = createAndSaveLemmas(page, page.getSite());
-                createAndSaveIndexes(lemmas, page);
-            }
+        // сохраняем леммы и индексы в репозиторий, если страница уникальна
+        boolean isUnique = savePageToDatabase(page);
+        if (isUnique) {
+            ArrayList<Lemma> lemmas = createAndSaveLemmas(page, page.getSite());
+            createAndSaveIndexes(lemmas, page);
+        }
 
         if (taskList.isEmpty()) {
             return new CopyOnWriteArrayList<>();
         }
-
 
 
         // запускаем подзадачи
@@ -170,8 +168,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     }
 
 
-
-
     // метод сохранения страниц в репозиторий + обработка с повторяющимся значением в ячейке с уникальностью
     public boolean savePageToDatabase(Page page) {
         if (!pageRepository.existsByPathAndSite(page.getPath(), page.getSite())) {
@@ -181,8 +177,9 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         return false;
     }
 
+    // метод создания и сохранения демм в репозиторий
     @Transactional
-    public ArrayList <Lemma> createAndSaveLemmas(Page page, Site site) {
+    public ArrayList<Lemma> createAndSaveLemmas(Page page, Site site) {
         synchronized (lemmaRepository) {
             ArrayList<Lemma> lemmas = createLemmas(page, site);
             lemmaRepository.saveAll(lemmas);
@@ -190,9 +187,10 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         }
     }
 
+    // метод сохранения объектов Index
     @Transactional
-    public void createAndSaveIndexes (ArrayList <Lemma> lemmas, Page page) {
-        ArrayList <Index> indexes = createIndexObjects(lemmas,  page);
+    public void createAndSaveIndexes(ArrayList<Lemma> lemmas, Page page) {
+        ArrayList<Index> indexes = createIndexObjects(lemmas, page);
         indexRepository.saveAll(indexes);
     }
 
@@ -238,9 +236,9 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     }
 
     // метод создания списка объектов Lemma на основе страницы
-    private ArrayList <Lemma> createLemmas(Page page, Site site) {
-        ArrayList <Lemma> lemmas = new ArrayList<>();
-          HashMap<String, Integer> lemmasMap = getLemmasMap(page);
+    private ArrayList<Lemma> createLemmas(Page page, Site site) {
+        ArrayList<Lemma> lemmas = new ArrayList<>();
+        HashMap<String, Integer> lemmasMap = getLemmasMap(page);
 
         for (Map.Entry<String, Integer> entry : lemmasMap.entrySet()) {
             Optional<Lemma> optionalLemma = lemmaRepository.findLemmaByLemma(entry.getKey());
@@ -289,9 +287,7 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     }
 
 
-
-
-     // метод изменения урла с абсолютного на относительный. В БД пишем относительный
+    // метод изменения урла с абсолютного на относительный. В БД пишем относительный
     public static String changePathToSave(String path, Site site) {
         if (path == site.getUrl()) {
             return "/";
@@ -326,7 +322,7 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         }
 
         if (url.contains("#") || url.endsWith(".pdf") || url.endsWith(".jpg") || url.endsWith(".jpeg")
-                || url.endsWith(".png") || url.endsWith(".bmp") ) {
+                || url.endsWith(".png") || url.endsWith(".bmp")) {
             return "";
         }
 

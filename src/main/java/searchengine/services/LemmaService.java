@@ -4,6 +4,7 @@ import org.apache.lucene.morphology.LuceneMorphology;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.stereotype.Service;
+import searchengine.model.Page;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -16,34 +17,31 @@ public class LemmaService {
     private static final ArrayList<String> particlesNames = new ArrayList<>(
             Arrays.asList("МЕЖД", "ПРЕДЛ", "СОЮЗ", "ЧАСТ"));
 
-//    @Autowired
+
     public LemmaService(LuceneMorphology luceneMorphology) {
         this.morphology = luceneMorphology;
     }
 
-
-
-    public HashMap <String, Integer> createLemma (String text) {
+    // основной метод класса, возвращающий список уникальных лемм и частоту их появления в тексте
+    public HashMap<String, Integer> createLemma(String text) {
         String noHtmlText = cleanFromHtml(text);
-        ArrayList <String> separatedText = separateText(text);
-        ArrayList <String> baseWordsList = getBaseWordsList(separatedText);
-        HashMap <String, Integer> lemmas = collectLemmas (baseWordsList);
+        ArrayList<String> separatedText = separateText(noHtmlText);
+        ArrayList<String> baseWordsList = getBaseWordsList(separatedText);
+        HashMap<String, Integer> lemmas = collectLemmas(baseWordsList);
         return lemmas;
     }
 
 
-
     // метод очистки HTML от тэгов
-    private String cleanFromHtml (String text) {
+    public String cleanFromHtml(String text) {
         Document document = Jsoup.parse(text);
         String noHtmlText = document.text();
-        System.out.println(noHtmlText);
         return noHtmlText;
     }
 
 
     //метод разделения строки на слова
-    private ArrayList<String> separateText(String text) {
+    public ArrayList<String> separateText(String text) {
         ArrayList<String> wordsList = new ArrayList<>();
 
         // ищем только слова на кириллице
@@ -58,8 +56,8 @@ public class LemmaService {
     }
 
     // возвращаем список базовых словоформ, попутно убираем союзы, предлоги и тд.
-    private ArrayList <String> getBaseWordsList (ArrayList <String> text) {
-        ArrayList <String> baseForms = new ArrayList<>();
+    public ArrayList<String> getBaseWordsList(ArrayList<String> text) {
+        ArrayList<String> baseForms = new ArrayList<>();
         for (String word : text) {
 
             if (word.isBlank()) {
@@ -68,7 +66,7 @@ public class LemmaService {
 
             // получаем данные о слове, если это служебная часть речи - игнорируем
             List<String> wordInfoList = morphology.getMorphInfo(word);
-            String [] wordInfo = wordInfoList.toString().replaceAll("]","").split("\\s");
+            String[] wordInfo = wordInfoList.toString().replaceAll("]", "").split("\\s");
             if (particlesNames.contains(wordInfo[1])) {
                 continue;
             }
@@ -80,9 +78,24 @@ public class LemmaService {
         return baseForms;
     }
 
+    // метод получения базового слова
+    public String getBaseWord(String word) {
+        String result = "";
+        try {
+            result = morphology.getNormalForms(word).get(0);
+        } catch (Exception e) {
+            return result;
+        }
+        result = result.replaceAll("\\d", "");
+        if (result.length() < 3) {
+            return "";
+        }
+        return result;
+    }
 
-    private HashMap <String, Integer> collectLemmas(ArrayList<String> baseWordsList) {
-        HashMap <String, Integer> lemmas = new HashMap<>();
+    // метод получения Map с уникальными значениями лемм и их количеством
+    private HashMap<String, Integer> collectLemmas(ArrayList<String> baseWordsList) {
+        HashMap<String, Integer> lemmas = new HashMap<>();
         for (String word : baseWordsList) {
             if (!lemmas.containsKey(word)) {
                 lemmas.put(word, 1);
@@ -91,7 +104,11 @@ public class LemmaService {
         return lemmas;
     }
 
-
-
-
+    // метод создания списка лемм из страницы. Мы здесь не ведем подсчет частоты встречания лемм, возможны повторения
+    public ArrayList<String> createLemmasFromPage(Page page) {
+        String noHtmlText = cleanFromHtml(page.getContent());
+        ArrayList<String> separatedText = separateText(noHtmlText);
+        ArrayList<String> baseWordsList = getBaseWordsList(separatedText);
+        return baseWordsList;
+    }
 }
