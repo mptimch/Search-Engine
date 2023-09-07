@@ -7,8 +7,6 @@ indexing-settings:
     - url: https://sazur.ru
       name: Сазур
 
-#    - url: https://zharpizza.ru/kursk
-#      name: Жарпицца
 
 
 spring.datasource.url: jdbc:postgresql://localhost:5433/graduate_work
@@ -21,13 +19,3 @@ spring.sql.init.mode: always
 spring.jpa.hibernate.ddl-auto: create-drop
 spring.jpa.database-platform: org.hibernate.dialect.PostgreSQLDialect
 spring.jpa.show-sql: true
-
-
-
-
-#    - url: https://www.lenta.ru
-#      name: Лента.ру
-#    - url: https://www.skillbox.ru
-#      name: Skillbox
-#    - url: https://www.playback.ru
-#      name: PlayBack.Ru
