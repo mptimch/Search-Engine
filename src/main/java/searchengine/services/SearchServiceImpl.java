@@ -31,25 +31,21 @@ public class SearchServiceImpl implements SearchService {
     private final LemmaRepository lemmaRepository;
 
 
-    // это значение - частота появления леммы на страницах от общего количества.
-    // другими словами: если лемма встречается на 60% страниц или более - мы ее не учитываем в поисковом запросе
+    // this value is the frequency of the lemma on all pages to the total number of lemmas. We ignore popular lemmas
     double popularLemma = 60.0;
-
-    // Максимальный размер сниппета
     int snippetLengthLimit = 180;
 
 
     @Override
     public SearchResponse search(String query, String site, Integer offset, Integer limit) {
         SearchResponse response = new SearchResponse();
-
         long pages = pageRepository.count();
 
-        // разбиваем запрос на слова, преобразуем в объекты Lemma
+        // breaking the query into words, convert them into objects Lemma
         Set<String> querySet = lemmaService.createLemma(query).keySet();
-        HashMap<Lemma, Double> lemmasWithPopularity = createLemmas(querySet, pages, site);
+        HashMap<Lemma, Double> lemmasWithPopularity = createLemmasWithPopularity(querySet, pages, site);
 
-        // сортируем леммы в Map по возрастанию популярности
+        // sort the map by lemma's popularity
         LinkedHashMap<Lemma, Double> sortedLemmaWithPopularity = lemmasWithPopularity.entrySet()
                 .stream()
                 .sorted(Map.Entry.comparingByValue())
@@ -60,10 +56,7 @@ public class SearchServiceImpl implements SearchService {
                         LinkedHashMap::new
                 ));
 
-        // создаем список страниц, отвечающих запросу
         ArrayList<Page> relevantPages = findRelevantPages(sortedLemmaWithPopularity);
-
-        // Если нет результатов по такому запросу - возвращаем пустой список
         if (relevantPages.isEmpty()) {
             response.setResult(true);
             response.setCount(0);
@@ -71,36 +64,32 @@ public class SearchServiceImpl implements SearchService {
             return response;
         }
 
-        // просчитываем релевантность для каждой страницы
+        // calculating relevance for the each page
         ArrayList<Lemma> lemmas = new ArrayList<>(sortedLemmaWithPopularity.keySet());
         LinkedHashMap<Page, Double> pagesWithRelewanth = getRelevanthToPages(relevantPages, lemmas);
-
-        // Сортируем значения в Map по релевантности
         LinkedHashMap<Page, Double> pagesWithSortRelevance = pagesWithRelewanth.entrySet()
                 .stream()
-                .sorted(Map.Entry.<Page, Double>comparingByValue().reversed()) // Сортировка по значению (по убыванию)
+                .sorted(Map.Entry.<Page, Double>comparingByValue().reversed())
                 .collect(Collectors.toMap(
                         Map.Entry::getKey,
                         Map.Entry::getValue,
-                        (e1, e2) -> e1, // Если значения одинаковые, оставляем первое
+                        (e1, e2) -> e1,
                         LinkedHashMap::new
                 ));
 
         fillTheResponse(pagesWithSortRelevance, response, lemmas, limit, offset);
-
-
         return response;
     }
 
 
-    // метод разбивает запрос на слова и отсеивает самые популярные леммы.
-    // Возвращает HashMap с Lemma в качестве ключа и популярностью (на каком % страниц встречается) в значении.
-    private HashMap<Lemma, Double> createLemmas(Set<String> querySet, long pages, String siteStringFromQuery) {
+    // breaking the query into words ignoring the most popular lemmas.
+    // returns a HashMap with Lemma as the key and popularity percent as the value.
+    private HashMap<Lemma, Double> createLemmasWithPopularity(Set<String> querySet, long pages, String siteStringFromQuery) {
         HashMap<Lemma, Double> lemmasWithPopularity = new HashMap<>();
         querySet.forEach(word -> {
             Lemma lemma = new Lemma();
 
-            // блок для ситуаций, когда ищем в пределах сайта
+            // if searching within the site
             if (siteStringFromQuery != null && !siteStringFromQuery.isBlank()) {
                 Optional<Site> site = siteRepository.findByUrl(siteStringFromQuery);
                 Optional<Lemma> optionalLemma = site.flatMap(siteFromRepo -> lemmaRepository.findLemmaByLemmaAndSite(word, siteFromRepo));
@@ -108,7 +97,8 @@ public class SearchServiceImpl implements SearchService {
                     lemma = optionalLemma.get();
                 } else return;
             }
-            // блок для ситуаций, когда ищем по всем сайтам
+
+            // if searching within all site
             else {
                 Optional<Lemma> optional = lemmaRepository.findLemmaByLemma(word);
                 if (optional.isPresent()) {
@@ -116,7 +106,7 @@ public class SearchServiceImpl implements SearchService {
                 } else return;
             }
 
-            // смотрим, как часто встречается лемма. Убираем наиболее часто встречаемые
+            // removing popular lemma
             long lemmaOnPages = indexRepository.countPagesByLemma(lemma);
             double lemmaPopularity = (double) pages / (double) lemmaOnPages;
             if (lemmaPopularity < popularLemma) {
@@ -127,58 +117,44 @@ public class SearchServiceImpl implements SearchService {
     }
 
 
-    // Метод собирает список страниц, релевантных леммам из запроса. Начинает с самой редкой леммы.
     private ArrayList<Page> findRelevantPages(LinkedHashMap<Lemma, Double> sortedMap) {
         ArrayList<Page> pages = new ArrayList<>();
         List<Lemma> keysList = new ArrayList<>(sortedMap.keySet());
 
         for (Lemma lemma : keysList) {
-
-            // получаем сначала список страниц для 1й леммы
+            // get pagesList for the first or not first lemma
             if (pages.isEmpty()) {
                 List<Page> pageList = indexRepository.findDistinctPagesByLemma(lemma);
                 pages = pageList.isEmpty() ? new ArrayList<>() : (ArrayList<Page>) pageList;
-
-                // а если в списке уже есть страницы - ищем лемму по ним
             } else {
                 Optional<List<Page>> newPageList = indexRepository.findDistinctPageByLemmaAndPageIn(lemma, pages);
                 if (newPageList.isPresent() && !newPageList.get().isEmpty()) pages.addAll(newPageList.get());
             }
-
-            // если список пуст - нет смысла обращаться к репозиториям дальше
             if (pages.isEmpty()) return pages;
         }
         return pages;
     }
-
-
-    // метод просчитывает релевантности для страниц
+    
     private LinkedHashMap<Page, Double> getRelevanthToPages(ArrayList<Page> relevantPages, ArrayList<Lemma> lemmasList) {
-
-        // считаем абсолютную релевантность для каждой страницы и максимальную сумму
         LinkedHashMap<Page, Integer> pagesWithAbsoluteRelevanth = new LinkedHashMap<>();
         long maxRelevance = 0;
-
-        // считаем количество лемм для каждой страницы. Фиксируем максимум
+        
         for (Page page : relevantPages) {
-            ArrayList<String> lemmasOnThePage = lemmaService.createLemmasFromPage(page);
-            int relevance = getLemmasCount(lemmasOnThePage, lemmasList);
-
-            maxRelevance = Math.max(relevance, maxRelevance);
-            pagesWithAbsoluteRelevanth.put(page, relevance);
+            ArrayList<String> lemmasOnThePage = lemmaService.getLemmasListFromPage(page);
+            int absoluteRelevance = getLemmasCount(lemmasOnThePage, lemmasList);
+            maxRelevance = Math.max(absoluteRelevance, maxRelevance);
+            pagesWithAbsoluteRelevanth.put(page, absoluteRelevance);
         }
-
-        // считаем относительную релевантность для каждой страницы
+        
         LinkedHashMap<Page, Double> pagesWithRelevanth = new LinkedHashMap<>();
         for (Map.Entry<Page, Integer> entry : pagesWithAbsoluteRelevanth.entrySet()) {
-            double relevance = (double) entry.getValue() / (double) maxRelevance;
-            pagesWithRelevanth.put(entry.getKey(), relevance);
+            double relativeRelevance = (double) entry.getValue() / (double) maxRelevance;
+            pagesWithRelevanth.put(entry.getKey(), relativeRelevance);
         }
         return pagesWithRelevanth;
     }
 
 
-    // метод считает количество лемм на странице
     private int getLemmasCount(ArrayList<String> lemmasOnThePage, ArrayList<Lemma> lemmasList) {
         int relevance = 0;
         for (Lemma lemma : lemmasList) {
@@ -189,50 +165,41 @@ public class SearchServiceImpl implements SearchService {
                 }
             }
         }
-
         return relevance;
     }
 
-    // метод наполняет и подготавливает для отдачи response
     private SearchResponse fillTheResponse(LinkedHashMap<Page, Double> pagesWithRelewanth,
                                            SearchResponse response,
                                            ArrayList<Lemma> lemmas,
                                            Integer limit,
                                            Integer offset
     ) {
-
         limit = limit != null ? limit : 20;
         response.setResult(true);
         response.setCount(pagesWithRelewanth.size());
-
         List<PagesToResponse> data = new ArrayList<>();
+
         for (Map.Entry<Page, Double> entry : pagesWithRelewanth.entrySet()) {
             PagesToResponse pageToResponse = new PagesToResponse();
             pageToResponse.setSite(entry.getKey().getSite().getUrl());
             pageToResponse.setSitename(entry.getKey().getSite().getName());
             pageToResponse.setUri(entry.getKey().getPath());
             pageToResponse.setRelevance(entry.getValue());
-
             pageToResponse.setTitle(createTitle(entry.getKey()));
             pageToResponse.setSnippet(createSnippet(entry.getKey(), lemmas));
 
-            //вывод ограниченного количества результатов
             if (data.size() <= limit) {
                 data.add(pageToResponse);
             }
         }
-
-        // вывод результатов с отступом
         if (offset != null && offset < data.size()) {
             data = data.subList(offset, data.size());
         }
-
         response.setData(data);
         return response;
     }
 
 
-    // метод формирует title для Page. Необходимо для response
     private String createTitle(Page page) {
         String content = page.getContent();
         Document doc = Jsoup.parse(content);
@@ -242,8 +209,6 @@ public class SearchServiceImpl implements SearchService {
     }
 
 
-    // метод формирует сниппет. Для этого разбиваем осмысленный текст (title и body) на предложения
-    // и смотрим, какое лучше подходит.
     private String createSnippet(Page page, ArrayList<Lemma> lemmas) {
         List<String> lemmasList = lemmaRepository.findLemmasByLemmaIn(lemmas);
         Document doc = Jsoup.parse(page.getContent());
@@ -256,12 +221,12 @@ public class SearchServiceImpl implements SearchService {
         int maxcount = 0;
         String bestSnippet = "";
 
-        // по каждому предложению смотрим количество совпадений лемм
+        // for each sentence comparing the number of lemmas matches
         for (String sentence : sentences) {
             int currentMatchCount = 0;
             ArrayList<String> wordList = new ArrayList<>(Arrays.asList(sentence.toLowerCase().split("\\s+")));
 
-            // Сразу выделяем нужное слово жирным
+            // highlight the desired word in bold
             for (int i = 0; i < wordList.size(); i++) {
                 String word = wordList.get(i);
                 String baseWord = lemmaService.getBaseWord(word);
@@ -269,23 +234,19 @@ public class SearchServiceImpl implements SearchService {
                     String newWord = "<b>" + wordList.get(i) + "</b>";
                     wordList.set(i, newWord);
                     currentMatchCount++;
-
                 }
             }
 
-            // если у этого предложения больше всего совпадений - возвращаем его
             if (currentMatchCount > maxcount) {
                 bestSnippet = String.join(" ", wordList);
                 maxcount = currentMatchCount;
                 snippet = bestSnippet.length() < snippetLengthLimit ? bestSnippet : cutSnippet(bestSnippet);
             }
         }
-
         return snippet;
     }
 
 
-    // метод разбивает текст на предложения
     private ArrayList<String> splitTextIntoSentences(String text) {
         ArrayList<String> sentences = new ArrayList<>();
         BreakIterator breakIterator = BreakIterator.getSentenceInstance();
@@ -293,17 +254,14 @@ public class SearchServiceImpl implements SearchService {
 
         int start = breakIterator.first();
         int end = breakIterator.next();
-
         while (end != BreakIterator.DONE) {
             sentences.add(text.substring(start, end).trim());
             start = end;
             end = breakIterator.next();
         }
-
         return sentences;
     }
 
-    // метод делает обрезку сниппета, чтобы хотя бы 1 выделенное слово в него попало
     private String cutSnippet(String text) {
         int highlightIndex = text.indexOf("<b>");
 
@@ -316,7 +274,6 @@ public class SearchServiceImpl implements SearchService {
         }
     }
 
-    // метод для тех случаев, когда передан пустой запрос
     public MappingJacksonValue createResponseForNullQuery(SearchResponse response) {
         response.setError("Задан пустой поисковый запрос");
         response.setResult(false);

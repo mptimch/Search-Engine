@@ -33,20 +33,19 @@ public class IndexingServiceImpl implements IndexingService {
     private final IndexRepository indexRepository;
     private final LemmaRepository lemmaRepository;
 
-    // HashMap, где находятся объекты ForkJoinPool (для проверки состояния или остановки)
-    // и объекты SiteParserForkJoin - для получения оттуда незавершенных задч
+    // HashMap with ForkJoinPool objects are keys (for checking status or stopping)
+    // and SiteParserForkJoin objects - for getting unfinished tasks
     private HashMap<ForkJoinPool, SiteParserForkJoin> forkjoinMap = new HashMap<>();
 
 
     @Override
     public void startIndexing() {
-        // чистим базу
-        prepareDatabaseToIndexing();
+        cleanDBBeforeNewIndexing();
         SiteParserForkJoin.shutdownForkJoin = false;
 
         sites.getSites().forEach(site -> {
 
-            // создаем в таблице Site
+            // creatind a new Site in database
             Site newSite = new Site();
             newSite.setStatus(SiteIndexationStatus.INDEXING);
             newSite.setName(site.getName());
@@ -54,7 +53,7 @@ public class IndexingServiceImpl implements IndexingService {
             newSite.setStatusTime(LocalDateTime.now());
             siteRepository.save(newSite);
 
-            // Нам понадобится список объектов ForkJoinPool и нашего расширяющего его класса. Создаем
+            // Creating lists of ForkJoinPool objects and our class that extends it
             ForkJoinPool forkJoinPool = new ForkJoinPool();
             SiteParserForkJoin siteParserForkJoin = new SiteParserForkJoin(
                     pageRepository,
@@ -70,9 +69,8 @@ public class IndexingServiceImpl implements IndexingService {
             forkjoinMap.put(forkJoinPool, siteParserForkJoin);
 
 
-            // запускаем ForkJoinPool
+            // starting ForkJoinPool
             CopyOnWriteArrayList<Page> pageList = forkJoinPool.invoke(siteParserForkJoin);
-
             if (!SiteParserForkJoin.shutdownForkJoin) {
                 newSite.setStatus(SiteIndexationStatus.INDEXED);
                 siteRepository.save(newSite);
@@ -86,7 +84,6 @@ public class IndexingServiceImpl implements IndexingService {
             ForkJoinPool forkJoinPool = map.getKey();
             SiteParserForkJoin siteParserForkJoin = map.getValue();
 
-            // если forkJoinpool не завершил работу, то
             if (!forkJoinPool.isQuiescent()) {
                 Site site = siteParserForkJoin.getSite();
                 site.setLastError("Индексация остановлена пользователем");
@@ -94,11 +91,9 @@ public class IndexingServiceImpl implements IndexingService {
                 site.setStatus(SiteIndexationStatus.FAILED);
                 siteRepository.save(site);
 
-                // забираем и сохраняем в базу необработанные страницы (таски)
-                ArrayList<Page> pages = getPagesListFromForkJoinPool(siteParserForkJoin);
+                // getting uncomplete tasks, stopping ForkJoinPools
+                ArrayList<Page> pages = getNotHandledPagesFromForkJoinPool(siteParserForkJoin);
                 pages.forEach(siteParserForkJoin::savePageToDatabase);
-
-                // останавливаем ForkJoinPool
                 SiteParserForkJoin.shutdownForkJoin = true;
                 forkJoinPool.shutdown();
             }
@@ -110,40 +105,21 @@ public class IndexingServiceImpl implements IndexingService {
     public IndexingResponse indexingPage(String url) {
         IndexingResponse response = new IndexingResponse();
 
-        // проверяем урл на валидность
+        // validating URL
         if (!isValidUrl(url)) {
             response.setError("Введенный вами текст не является Url");
             return response;
         }
-
         if (!isSiteFromUrlsList(url)) {
             response.setError("Данная страница находится за пределами сайтов, указанных в конфигурационном файле");
             return response;
         }
 
-        // получаем или создаем объект Site
-        Site site = new Site();
-        ArrayList<String> siteNameAndDomain = getSiteNameAndDomainByUrl(url);
-
-        Optional<Site> optionalSite = siteRepository.findByUrl(siteNameAndDomain.get(1));
-        if (!optionalSite.isPresent()) {
-            site.setName(siteNameAndDomain.get(0));
-            site.setUrl(siteNameAndDomain.get(1));
-
-        } else {
-            site = optionalSite.get();
-        }
-        site.setStatus(SiteIndexationStatus.INDEXING);
-        site.setStatusTime(LocalDateTime.now());
-        site.setLastError(null);
-        siteRepository.save(site);
-
-
-        // преобразовываем url в относительный
-        String path = SiteParserForkJoin.changePathToSave(url, site);
+        Site site = getOrCreateSite(url);
+        String path = SiteParserForkJoin.AbsolutePathToRelative(url, site);
         Page page = new Page();
 
-        // проверяем, индексировалась ли такая страница. Если да - удаляем все данные
+        // delete data from the database if the page has been indexed
         if (pageRepository.existsByPathAndSite(path, site)) {
             page = pageRepository.findByPathAndSite(path, site);
             removeAllPageInfoFromDatabase(page);
@@ -160,18 +136,14 @@ public class IndexingServiceImpl implements IndexingService {
                 new CopyOnWriteArrayList<String>(),
                 new CopyOnWriteArrayList<String>(Arrays.asList(url))
         );
-
-        // запускаем парсинг на одну задачу, в однопотоке
+        // start parsing in a separate single thread
         siteParserForkJoin.parseSinglePage = true;
         SiteParserForkJoin.shutdownForkJoin = false;
-
-        // отправляем задачу выполняться, а сами возвращаем ответ
         new Thread(() -> siteParserForkJoin.compute()).start();
         return response;
     }
 
-    // получаем все леммы этой страницы, изменяем значения в таблице lemma,
-    // удаляем page (и за ней из-за каскадного удаления будут устранены все связанные объекты Index)
+
     private void removeAllPageInfoFromDatabase(Page page) {
         String content = page.getContent();
         HashMap<String, Integer> lemmas = lemmaService.createLemma(content);
@@ -179,9 +151,6 @@ public class IndexingServiceImpl implements IndexingService {
         pageRepository.delete(page);
     }
 
-
-    // Метод оходит список лемм и снижает их количество.
-    // Запись в БД реализовал отдельным методом, чтобы это делалось в одну транзакцию
     private void decreaseLemmasInDatabase(HashMap<String, Integer> lemmas) {
         ArrayList<Lemma> changedLemmas = new ArrayList<>();
 
@@ -195,13 +164,12 @@ public class IndexingServiceImpl implements IndexingService {
         makeTransactionToDecreaseLemmas(changedLemmas);
     }
 
-    // сохранение измененного количества лемм в базу
     @Transactional
     void makeTransactionToDecreaseLemmas(ArrayList<Lemma> changedLemmas) {
         changedLemmas.forEach(lemma -> lemmaRepository.save(lemma));
     }
 
-    // проверка валидности Урл
+
     private boolean isValidUrl(String url) {
         try {
             new URL(url);
@@ -211,7 +179,6 @@ public class IndexingServiceImpl implements IndexingService {
         }
     }
 
-    // проверка, является ли эта страница частью сайтов, указанных в конфиге
     private boolean isSiteFromUrlsList(String url) {
         for (searchengine.config.Site site : sites.getSites()) {
             String domain = site.getUrl();
@@ -222,7 +189,24 @@ public class IndexingServiceImpl implements IndexingService {
         return false;
     }
 
-    // метод получения имени сайта и домена из урл
+    private Site getOrCreateSite(String url) {
+        Site site = new Site();
+        ArrayList<String> siteNameAndDomain = getSiteNameAndDomainByUrl(url);
+        Optional<Site> optionalSite = siteRepository.findByUrl(siteNameAndDomain.get(1));
+
+        if (!optionalSite.isPresent()) {
+            site.setName(siteNameAndDomain.get(0));
+            site.setUrl(siteNameAndDomain.get(1));
+        } else {
+            site = optionalSite.get();
+        }
+        site.setStatus(SiteIndexationStatus.INDEXING);
+        site.setStatusTime(LocalDateTime.now());
+        site.setLastError(null);
+        siteRepository.save(site);
+        return site;
+    }
+
     private ArrayList<String> getSiteNameAndDomainByUrl(String url) {
         ArrayList<String> siteNameAndDomain = new ArrayList<>();
         for (searchengine.config.Site site : sites.getSites()) {
@@ -234,9 +218,8 @@ public class IndexingServiceImpl implements IndexingService {
         return siteNameAndDomain;
     }
 
-
-    // метод очистки базы. Нужен при перезапуске индексации
-    private void prepareDatabaseToIndexing() {
+    // we need this method when reindexing
+    private void cleanDBBeforeNewIndexing() {
         indexRepository.deleteAll();
         lemmaRepository.deleteAll();
         pageRepository.deleteAll();
@@ -245,25 +228,23 @@ public class IndexingServiceImpl implements IndexingService {
         site.setStatus(SiteIndexationStatus.INDEXING);
     }
 
-
-    // метод, возвращающий список необработанных страниц у остановленного ForkJoinPool
-    private ArrayList<Page> getPagesListFromForkJoinPool(SiteParserForkJoin siteParserForkJoin) {
+    // we need this method when stops indexing
+    private ArrayList<Page> getNotHandledPagesFromForkJoinPool(SiteParserForkJoin siteParserForkJoin) {
         ArrayList<String> taskUrls = new ArrayList<>(siteParserForkJoin.getTaskUrls());
 
         if (taskUrls.isEmpty()) {
             return new ArrayList<>();
         }
 
-        // чистим список от дублей на всякий случай
+        // removing duplicates
         taskUrls.stream().distinct().collect(Collectors.toList());
 
-        //создаем список с необработанными страницами
         ArrayList<Page> pages = new ArrayList<>();
         taskUrls.forEach(task -> {
             Page page = new Page();
             Site site = siteParserForkJoin.getSite();
             page.setSite(site);
-            page.setPath(siteParserForkJoin.changePathToSave(task, site));
+            page.setPath(siteParserForkJoin.AbsolutePathToRelative(task, site));
             page.setCode(00);
             page.setContent("Индексация остановлена пользователем");
             pages.add(page);

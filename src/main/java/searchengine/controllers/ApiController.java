@@ -28,7 +28,7 @@ public class ApiController {
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
 
-    public static boolean isIndexing; // индикатор, идет ли сейчас индексация
+    public static boolean isIndexing; // indicator is indexation is in progress
     private IndexingResponse indexingResponse = new IndexingResponse();
     private SearchResponse searchResponse = new SearchResponse();
 
@@ -43,7 +43,7 @@ public class ApiController {
     public ResponseEntity<MappingJacksonValue> startIndexing() {
         clearIndexingResponse();
 
-        // проверка, идет ли индексация
+        // checks is indexation is in progress
         if (isIndexing) {
             indexingResponse.setError("Индексация уже запущена");
             MappingJacksonValue jacksonValue = new MappingJacksonValue(indexingResponse);
@@ -52,7 +52,7 @@ public class ApiController {
 
         isIndexing = true;
 
-        // отдельно запускаем индексацию страниц
+        // launch page indexing separately
         executorService.execute(() -> {
             indexingResponse.setResult(true);
             indexingService.startIndexing();
@@ -60,8 +60,6 @@ public class ApiController {
         });
 
         MappingJacksonValue jacksonValue = new MappingJacksonValue(indexingResponse);
-
-        // если есть текст ошибки - то выводим часть сообщения, если нет - то целиком
         if (indexingResponse.getError() == null) {
             jacksonValue.setSerializationView(PartialView.class);
         }
@@ -73,14 +71,14 @@ public class ApiController {
     public ResponseEntity<MappingJacksonValue> stopIndexing() {
         clearIndexingResponse();
 
-        // проверяем, идет ли индексация
+        // checks is indexation is in progress
         if (!isIndexing) {
             indexingResponse.setError("Индексация не запущена");
             MappingJacksonValue jacksonValue = new MappingJacksonValue(indexingResponse);
             return ResponseEntity.ok(jacksonValue);
         }
 
-        // останавливаем индексацию
+        // stopping indexing
         indexingService.stopIndexing();
         isIndexing = false;
         MappingJacksonValue jacksonValue = new MappingJacksonValue(indexingResponse);
@@ -97,14 +95,12 @@ public class ApiController {
     public ResponseEntity<MappingJacksonValue> indexPage(@RequestParam String url) {
         clearIndexingResponse();
         indexingResponse = indexingService.indexingPage(url);
-
         MappingJacksonValue jacksonValue = new MappingJacksonValue(indexingResponse);
 
         if (indexingResponse.getError() == null) {
             indexingResponse.setResult(true);
             jacksonValue.setSerializationView(PartialView.class);
         }
-
         return ResponseEntity.ok(jacksonValue);
     }
 
@@ -116,14 +112,14 @@ public class ApiController {
             @RequestParam(name = "offset", required = false) Integer offset,
             @RequestParam(name = "limit", required = false) Integer limit
     ) {
-        // проверяем, не пустой ли поисковый запрос
+        // check if the query is empty
         String query = queryParam.orElse(null);
         if (query == null || query.trim().isEmpty()) {
             MappingJacksonValue jacksonValue = searchService.createResponseForNullQuery(searchResponse);
             return ResponseEntity.ok(jacksonValue);
         }
 
-        // формируем ответ на поисковый запрос
+        // generating a response
         searchResponse = searchService.search(query, site, offset, limit);
         MappingJacksonValue jacksonValue = new MappingJacksonValue(searchResponse);
 
@@ -131,7 +127,6 @@ public class ApiController {
             searchResponse.setResult(false);
             jacksonValue.setSerializationView(PartialView.class);
         } else jacksonValue.setSerializationView(FullView.class);
-
         return ResponseEntity.ok(jacksonValue);
     }
 

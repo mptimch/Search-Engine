@@ -40,35 +40,28 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
 
     private final CopyOnWriteArrayList<Page> pageList;
 
-    // HashSet для избежания повторного обхода страниц
-    private final CopyOnWriteArrayList<String> doneUrls;
-
-    // Список урл, которые мы планируем спарсить, формат - для сохранения в базу
-    private final CopyOnWriteArrayList<String> taskUrls;
-
-
-    // булево значение, сигнализирующее, что мы выполняем остановку индексации
+    // a boolean value indicating that we are stopping indexing
     public static boolean shutdownForkJoin;
-
-    // булево значение, если мы хотим спарсить одну страницу
     public boolean parseSinglePage;
+
+    // HashSet to avoid repeated page parsing
+    private final CopyOnWriteArrayList<String> doneUrls;
+    private final CopyOnWriteArrayList<String> taskUrls;
 
 
     @Override
     protected CopyOnWriteArrayList<Page> compute() {
-        // проверка, не завершаем ли мы парсинг
         if (shutdownForkJoin) {
             return new CopyOnWriteArrayList<>();
         }
 
-        // создаем соединение и необходимые переменные
+        // creating connection and the necessary variables
         Connection.Response response = null;
-        String pathToDatabase = changePathToSave(path, site);
+        String pathToDatabase = AbsolutePathToRelative(path, site);
         Elements urls = new Elements();
         String pageContent = "";
         int statusCode = 0;
 
-        // подключаемся к сайту
         try {
             Thread.sleep(2000);
             response = Jsoup.connect(path)
@@ -76,30 +69,23 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
                     .referrer("http://www.google.com")
                     .timeout(1500)
                     .execute();
-
             statusCode = response.statusCode();
-
-            // в зависимости от кода ответа прописываем в базу нужную ошибку
         } catch (HttpStatusException e) {
             savePageWithConnectionError(path, site, e.getStatusCode(), e.getMessage());
             return new CopyOnWriteArrayList<>();
-
         } catch (SocketTimeoutException e) {
             savePageWithConnectionError(path, site, 504, e.getMessage());
             return new CopyOnWriteArrayList<>();
-
         } catch (Exception e) {
             savePageWithConnectionError(path, site, 00, e.getMessage());
             return new CopyOnWriteArrayList<>();
         }
 
-
-        // собираем контент со страницы
+        // getting page content
         try {
             Document doc = response.parse();
             urls = doc.select("a[href]");
             pageContent = doc.html();
-
         } catch (Exception e) {
             System.out.println("Ошибка при парсинге страницы " + path);
             doneUrls.add(path);
@@ -108,8 +94,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
             return new CopyOnWriteArrayList<>();
         }
 
-
-        // метод на случай, если мы парсим одну страницу, а не сайт целиком
         if (parseSinglePage) {
             Page page = createPage(path, site, statusCode, pageContent);
             pageRepository.save(page);
@@ -118,26 +102,21 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
             return new CopyOnWriteArrayList<>();
         }
 
-        // создаем список подзадач для ForkJoinPool
-        List<SiteParserForkJoin> taskList = new ArrayList<>();
-
+        List<SiteParserForkJoin> subTaskList = new ArrayList<>();
         urls.forEach(element -> {
-            //проверяем урл на корректность
             String url = checkUrl(element.attr("href"), site.getUrl());
             if (url.length() < 2 || doneUrls.contains(url) || taskUrls.contains(url)) {
                 return;
             }
 
-            // создаем и отделяем новую задачу для ForkJoinPool
             SiteParserForkJoin task = new SiteParserForkJoin(pageRepository, siteRepository, lemmaRepository, indexRepository, site, url, pageList, doneUrls, taskUrls);
             task.fork();
-            taskList.add(task);
+            subTaskList.add(task);
             taskUrls.add(url);
         });
 
 
-        // проверяем, нет ли этой задачи в выполненных или запланированных, создаем Page,
-        // создаем и сохраняем Index и Lemma
+        // checking this task in the completed or planned lists
         Page page = new Page();
         if (!doneUrls.contains(path) || !doneUrls.contains(pathToDatabase)) {
             page = createPage(path, site, statusCode, pageContent);
@@ -147,20 +126,17 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
             taskUrls.remove(path);
         } else return new CopyOnWriteArrayList<>();
 
-        // сохраняем леммы и индексы в репозиторий, если страница уникальна
         boolean isUnique = savePageToDatabase(page);
         if (isUnique) {
             ArrayList<Lemma> lemmas = createAndSaveLemmas(page, page.getSite());
             createAndSaveIndexes(lemmas, page);
         }
 
-        if (taskList.isEmpty()) {
+        if (subTaskList.isEmpty()) {
             return new CopyOnWriteArrayList<>();
         }
 
-
-        // запускаем подзадачи
-        for (SiteParserForkJoin task : taskList) {
+        for (SiteParserForkJoin task : subTaskList) {
             task.join();
         }
         pageList.add(page);
@@ -168,7 +144,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     }
 
 
-    // метод сохранения страниц в репозиторий + обработка с повторяющимся значением в ячейке с уникальностью
     public boolean savePageToDatabase(Page page) {
         if (!pageRepository.existsByPathAndSite(page.getPath(), page.getSite())) {
             pageRepository.save(page);
@@ -177,7 +152,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         return false;
     }
 
-    // метод создания и сохранения демм в репозиторий
     @Transactional
     public ArrayList<Lemma> createAndSaveLemmas(Page page, Site site) {
         synchronized (lemmaRepository) {
@@ -187,7 +161,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         }
     }
 
-    // метод сохранения объектов Index
     @Transactional
     public void createAndSaveIndexes(ArrayList<Lemma> lemmas, Page page) {
         ArrayList<Index> indexes = createIndexObjects(lemmas, page);
@@ -195,9 +168,8 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
     }
 
 
-    // метод сохранения страниц с ошибкой обработки
     private void savePageWithConnectionError(String path, Site site, int statusCode, String errorMessage) {
-        String pathToDatabase = changePathToSave(path, site);
+        String pathToDatabase = AbsolutePathToRelative(path, site);
         doneUrls.add(path);
         doneUrls.add(pathToDatabase);
         taskUrls.remove(path);
@@ -224,9 +196,8 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         doneUrls.add(path);
     }
 
-    // метод создания страницы
     private Page createPage(String path, Site site, int statusCode, String content) {
-        String newPath = changePathToSave(path, site);
+        String newPath = AbsolutePathToRelative(path, site);
         Page page = new Page();
         page.setSite(site);
         page.setPath(newPath);
@@ -235,16 +206,13 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         return page;
     }
 
-    // метод создания списка объектов Lemma на основе страницы
     private ArrayList<Lemma> createLemmas(Page page, Site site) {
         ArrayList<Lemma> lemmas = new ArrayList<>();
         HashMap<String, Integer> lemmasMap = getLemmasMap(page);
-
         for (Map.Entry<String, Integer> entry : lemmasMap.entrySet()) {
             Optional<Lemma> optionalLemma = lemmaRepository.findLemmaByLemma(entry.getKey());
             Lemma lemma = new Lemma();
 
-            // если лемма существует - изменяем ее значение frequency и переходим к другому объекту Map
             if (optionalLemma.isPresent()) {
                 lemma = optionalLemma.get();
                 lemma.setFrequency(lemma.getFrequency() + entry.getValue());
@@ -260,7 +228,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         return lemmas;
     }
 
-    // метод создания списка объектов Index
     private ArrayList<Index> createIndexObjects(ArrayList<Lemma> lemmas, Page page) {
         ArrayList<Index> indexes = new ArrayList<>();
         HashMap<String, Integer> lemmasMap = getLemmasMap(page);
@@ -275,7 +242,6 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         return indexes;
     }
 
-    // метод получения HashMap с леммами переданной страницы
     private HashMap<String, Integer> getLemmasMap(Page page) {
         LemmaService lemmaService = null;
         try {
@@ -288,7 +254,7 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
 
 
     // метод изменения урла с абсолютного на относительный. В БД пишем относительный
-    public static String changePathToSave(String path, Site site) {
+    public static String AbsolutePathToRelative(String path, Site site) {
         if (path == site.getUrl()) {
             return "/";
         }
@@ -304,15 +270,12 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
         if (newPath.isEmpty()) {
             return "/";
         }
-
         return newPath;
     }
 
 
-    // метод проверки УРЛ. Убираем ссылки на другие сайты, якоря, UTM-метки, ссылки на файлы
     private static String checkUrl(String url, String domain) {
         String correctUrl = "";
-
         if (url.startsWith("/") && url.length() > 3) {
             correctUrl = domain + url;
         }
@@ -335,12 +298,10 @@ public class SiteParserForkJoin extends RecursiveTask<CopyOnWriteArrayList<Page>
             }
             SiteParserForkJoin.checkUrl(noUtm, domain);
         }
-
         return correctUrl;
     }
 
 
-    // наиболее частые коды ошибок и сообщения. Для "красивой" записи в базу
     private static String getStatusCodeMessage(int statuscode) {
         switch (statuscode) {
             case 400:

@@ -22,7 +22,7 @@ public class LemmaService {
         this.morphology = luceneMorphology;
     }
 
-    // основной метод класса, возвращающий список уникальных лемм и частоту их появления в тексте
+    // main method that returns Map with unique lemmas and their repetition rate
     public HashMap<String, Integer> createLemma(String text) {
         String noHtmlText = cleanFromHtml(text);
         ArrayList<String> separatedText = separateText(noHtmlText);
@@ -32,7 +32,6 @@ public class LemmaService {
     }
 
 
-    // метод очистки HTML от тэгов
     public String cleanFromHtml(String text) {
         Document document = Jsoup.parse(text);
         String noHtmlText = document.text();
@@ -40,14 +39,12 @@ public class LemmaService {
     }
 
 
-    //метод разделения строки на слова
     public ArrayList<String> separateText(String text) {
         ArrayList<String> wordsList = new ArrayList<>();
 
-        // ищем только слова на кириллице
+        // looking only for Cyrillic words
         Pattern pattern = Pattern.compile("\\b[а-яА-Я]+\\b");
         Matcher matcher = pattern.matcher(text);
-
         while (matcher.find()) {
             String word = matcher.group().toLowerCase();
             wordsList.add(word);
@@ -55,7 +52,7 @@ public class LemmaService {
         return wordsList;
     }
 
-    // возвращаем список базовых словоформ, попутно убираем союзы, предлоги и тд.
+
     public ArrayList<String> getBaseWordsList(ArrayList<String> text) {
         ArrayList<String> baseForms = new ArrayList<>();
         for (String word : text) {
@@ -64,21 +61,17 @@ public class LemmaService {
                 continue;
             }
 
-            // получаем данные о слове, если это служебная часть речи - игнорируем
             List<String> wordInfoList = morphology.getMorphInfo(word);
             String[] wordInfo = wordInfoList.toString().replaceAll("]", "").split("\\s");
             if (particlesNames.contains(wordInfo[1])) {
                 continue;
             }
-
-            // получаем нормальную форму слова, добавляем в список
             String normalForm = morphology.getNormalForms(word).get(0);
             baseForms.add(normalForm);
         }
         return baseForms;
     }
 
-    // метод получения базового слова
     public String getBaseWord(String word) {
         String result = "";
         try {
@@ -93,7 +86,7 @@ public class LemmaService {
         return result;
     }
 
-    // метод получения Map с уникальными значениями лемм и их количеством
+
     private HashMap<String, Integer> collectLemmas(ArrayList<String> baseWordsList) {
         HashMap<String, Integer> lemmas = new HashMap<>();
         for (String word : baseWordsList) {
@@ -104,8 +97,8 @@ public class LemmaService {
         return lemmas;
     }
 
-    // метод создания списка лемм из страницы. Мы здесь не ведем подсчет частоты встречания лемм, возможны повторения
-    public ArrayList<String> createLemmasFromPage(Page page) {
+    // creating a list of lemmas from a page. Lemmas repetitions are possible
+    public ArrayList<String> getLemmasListFromPage(Page page) {
         String noHtmlText = cleanFromHtml(page.getContent());
         ArrayList<String> separatedText = separateText(noHtmlText);
         ArrayList<String> baseWordsList = getBaseWordsList(separatedText);
